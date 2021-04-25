@@ -74,6 +74,7 @@ dependencies = [
  "rusoto_s3",
  "serde",
  "tokio",
+ "url",
  "warp",
 ]
 

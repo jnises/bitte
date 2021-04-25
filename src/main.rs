@@ -1,7 +1,7 @@
 use env_logger;
 use handlebars::{Handlebars, RenderError};
 use lazy_static::lazy_static;
-use log::warn;
+use log::{info, warn};
 use rusoto_core::{
     credential::{AwsCredentials, DefaultCredentialsProvider, ProvideAwsCredentials},
     request::BufferedHttpResponse,
@@ -66,6 +66,7 @@ struct Ctx {
 
 #[derive(Deserialize)]
 struct Query {
+    // TODO does this even work with the delimiter common_prefixes thing?
     nodir: Option<bool>,
 }
 
@@ -77,7 +78,7 @@ struct DirectoryListingData<'a> {
     items: Vec<&'a str>,
 }
 
-async fn directory_listing(base: &str, ctx: Ctx) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
+async fn directory_listing(base: &str, ctx: &Ctx) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
     let prefix = path_to_key(base)?;
     // TODO use pagination
     let list = ctx
@@ -86,7 +87,6 @@ async fn directory_listing(base: &str, ctx: Ctx) -> Result<Box<dyn warp::Reply>,
             bucket: BUCKET.into(),
             prefix: Some(prefix.into()),
             delimiter: Some("/".into()),
-            // TODO use delimiter?
             ..Default::default()
         })
         .await
@@ -101,31 +101,37 @@ async fn directory_listing(base: &str, ctx: Ctx) -> Result<Box<dyn warp::Reply>,
     }
     let mut items = vec![];
     if let Some(ref common) = list.common_prefixes {
-        items.extend(common.iter().filter_map(|c| {
-            c.prefix.as_deref()?.strip_prefix(prefix)
-        }));
+        items.extend(
+            common
+                .iter()
+                .filter_map(|c| c.prefix.as_deref()?.strip_prefix(prefix)),
+        );
     }
     if let Some(ref contents) = list.contents {
-        items.extend(contents
-            .iter()
-            // TODO handle keys that end with /
-            // TODO log None here
-            .filter_map(|c| Some(c.key.as_deref()?.strip_prefix(prefix)?)));
+        items.extend(
+            contents
+                .iter()
+                // TODO handle keys that end with /
+                // TODO log None here
+                .filter_map(|c| Some(c.key.as_deref()?.strip_prefix(prefix)?)),
+        );
     }
-    let parent = get_parent(base).unwrap_or("");
-    dbg!(&parent);
-    let data = DirectoryListingData {
-        // TODO change
-        title: "title",
-        path: base,
-        parent,
-        items,
-    };
-    Ok(Box::new(warp::reply::html(
-        ctx.handlebars
-            .render("directory_listing", &data)
-            .map_err(|e| TemplateError { inner: e })?,
-    )))
+    if items.is_empty() {
+        Err(warp::reject::not_found())
+    } else {
+        let parent = get_parent(base).unwrap_or("");
+        let data = DirectoryListingData {
+            title: base,
+            path: base,
+            parent,
+            items,
+        };
+        Ok(Box::new(warp::reply::html(
+            ctx.handlebars
+                .render("directory_listing", &data)
+                .map_err(|e| TemplateError { inner: e })?,
+        )))
+    }
 }
 
 // TODO is there some way to avoid the box in the return?
@@ -139,7 +145,7 @@ async fn request(
     dbg!(pathstr);
     debug_assert!(pathstr.starts_with('/'));
     if pathstr.ends_with("/") && query.nodir != Some(true) {
-        directory_listing(pathstr, ctx).await
+        directory_listing(pathstr, &ctx).await
     } else {
         let s3path = pathstr
             .strip_prefix('/')
@@ -167,7 +173,7 @@ async fn request(
                         expires_in: Duration::from_secs(60 * 60 * 24),
                     },
                 );
-
+                dbg!(&presigned);
                 Ok(Box::new(warp::redirect::temporary(
                     Uri::from_str(&presigned).map_err(|e| BadPresignedUrl { inner: e })?,
                 )))
@@ -179,6 +185,7 @@ async fn request(
                 status: StatusCode::NOT_FOUND,
                 ..
             })) => {
+                info!("not found");
                 if query.nodir == Some(true) {
                     Err(warp::reject::not_found())
                 } else {
@@ -186,7 +193,7 @@ async fn request(
                     if !base.ends_with("/") {
                         base.push('/');
                     }
-                    directory_listing(&base, ctx).await
+                    directory_listing(&base, &ctx).await
                 }
             }
             Err(e) => Err(warp::reject::custom(S3Error {
