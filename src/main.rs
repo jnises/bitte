@@ -85,6 +85,7 @@ async fn directory_listing(base: &str, ctx: Ctx) -> Result<Box<dyn warp::Reply>,
         .list_objects_v2(ListObjectsV2Request {
             bucket: BUCKET.into(),
             prefix: Some(prefix.into()),
+            delimiter: Some("/".into()),
             // TODO use delimiter?
             ..Default::default()
         })
@@ -98,33 +99,33 @@ async fn directory_listing(base: &str, ctx: Ctx) -> Result<Box<dyn warp::Reply>,
     if list.is_truncated == Some(true) {
         warn!("list of ({}) has too many results", base);
     }
-    match list.contents {
-        Some(contents) => {
-            if contents.is_empty() {
-                Err(warp::reject::not_found())
-            } else {
-                let parent = get_parent(base).unwrap_or("");
-                dbg!(&parent);
-                let data = DirectoryListingData {
-                    // TODO change
-                    title: "title",
-                    path: base,
-                    parent,
-                    items: contents
-                        .iter()
-                        // TODO log None here
-                        .filter_map(|c| Some(c.key.as_deref()?.strip_prefix(prefix)?))
-                        .collect(),
-                };
-                Ok(Box::new(warp::reply::html(
-                    ctx.handlebars
-                        .render("directory_listing", &data)
-                        .map_err(|e| TemplateError { inner: e })?,
-                )))
-            }
-        }
-        None => Err(warp::reject::not_found()),
+    let mut items = vec![];
+    if let Some(ref common) = list.common_prefixes {
+        items.extend(common.iter().filter_map(|c| {
+            c.prefix.as_deref()?.strip_prefix(prefix)
+        }));
     }
+    if let Some(ref contents) = list.contents {
+        items.extend(contents
+            .iter()
+            // TODO handle keys that end with /
+            // TODO log None here
+            .filter_map(|c| Some(c.key.as_deref()?.strip_prefix(prefix)?)));
+    }
+    let parent = get_parent(base).unwrap_or("");
+    dbg!(&parent);
+    let data = DirectoryListingData {
+        // TODO change
+        title: "title",
+        path: base,
+        parent,
+        items,
+    };
+    Ok(Box::new(warp::reply::html(
+        ctx.handlebars
+            .render("directory_listing", &data)
+            .map_err(|e| TemplateError { inner: e })?,
+    )))
 }
 
 // TODO is there some way to avoid the box in the return?
@@ -133,7 +134,9 @@ async fn request(
     query: Query,
     ctx: Ctx,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
+    // TODO unescape path?
     let pathstr = path.as_str();
+    dbg!(pathstr);
     debug_assert!(pathstr.starts_with('/'));
     if pathstr.ends_with("/") && query.nodir != Some(true) {
         directory_listing(pathstr, ctx).await
