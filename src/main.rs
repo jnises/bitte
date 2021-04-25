@@ -1,7 +1,7 @@
 use env_logger;
 use handlebars::{Handlebars, RenderError};
 use lazy_static::lazy_static;
-use log::{debug, error, info, warn};
+use log::warn;
 use rusoto_core::{
     credential::{AwsCredentials, DefaultCredentialsProvider, ProvideAwsCredentials},
     request::BufferedHttpResponse,
@@ -12,15 +12,16 @@ use rusoto_s3::{
     GetObjectRequest, HeadObjectError, HeadObjectRequest, ListObjectsV2Request, S3Client, S3,
 };
 use serde::{Deserialize, Serialize};
-use std::{borrow::Borrow, str::FromStr, sync::Arc, time::Duration};
+use std::{str::FromStr, sync::Arc, time::Duration};
 use warp::{
     http::uri::InvalidUri,
     hyper::{StatusCode, Uri},
     path::FullPath,
+    reject::Reject,
     Filter,
 };
 mod utils;
-use utils::get_parent;
+use utils::{get_parent, path_to_key};
 
 lazy_static! {
     static ref REGION: Region = Region::Custom {
@@ -32,36 +33,36 @@ const BUCKET: &'static str = "testbucket";
 
 const DIR_LIST_TEMPLATE: &'static str = include_str!("directory_listing.hbs");
 
-struct Ctx {
-    s3: Arc<S3Client>,
-    credentials: Arc<AwsCredentials>,
-    handlebars: Arc<Handlebars<'static>>,
-}
-
 #[derive(Debug)]
 struct BadPresignedUrl {
     inner: InvalidUri,
 }
-impl warp::reject::Reject for BadPresignedUrl {}
+impl Reject for BadPresignedUrl {}
 
 #[derive(Debug)]
 struct S3Error<T> {
     inner: RusotoError<T>,
     path: String,
 }
-impl<T> warp::reject::Reject for S3Error<T> where T: std::fmt::Debug + Send + Sync + 'static {}
+impl<T> Reject for S3Error<T> where T: std::fmt::Debug + Send + Sync + 'static {}
 
 #[derive(Debug)]
 struct TemplateError {
     inner: RenderError,
 }
-impl warp::reject::Reject for TemplateError {}
+impl Reject for TemplateError {}
 
 #[derive(Debug)]
 struct UnknownError {
     message: &'static str,
 }
-impl warp::reject::Reject for UnknownError {}
+impl Reject for UnknownError {}
+
+struct Ctx {
+    s3: Arc<S3Client>,
+    credentials: Arc<AwsCredentials>,
+    handlebars: Arc<Handlebars<'static>>,
+}
 
 #[derive(Deserialize)]
 struct Query {
@@ -76,10 +77,8 @@ struct DirectoryListingData<'a> {
     items: Vec<&'a str>,
 }
 
-async fn directory_listing(
-    prefix: &str,
-    ctx: Ctx,
-) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
+async fn directory_listing(base: &str, ctx: Ctx) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
+    let prefix = path_to_key(base)?;
     // TODO use pagination
     let list = ctx
         .s3
@@ -93,25 +92,24 @@ async fn directory_listing(
         .map_err(|e| {
             warp::reject::custom(S3Error {
                 inner: e,
-                path: prefix.into(),
+                path: base.into(),
             })
         })?;
     if list.is_truncated == Some(true) {
-        warn!("list of prefix ({}) has too many results", prefix);
+        warn!("list of ({}) has too many results", base);
     }
     match list.contents {
         Some(contents) => {
             if contents.is_empty() {
                 Err(warp::reject::not_found())
             } else {
-                let parent = if let Some(parent) = get_parent(prefix) { format!("/{}", parent) } else { "".into() };
-                dbg!(prefix);
+                let parent = get_parent(base).unwrap_or("");
                 dbg!(&parent);
                 let data = DirectoryListingData {
                     // TODO change
                     title: "title",
-                    path: &format!("/{}", prefix),
-                    parent: &parent,
+                    path: base,
+                    parent,
                     items: contents
                         .iter()
                         // TODO log None here
@@ -135,15 +133,14 @@ async fn request(
     query: Query,
     ctx: Ctx,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
-    let s3path = path
-        .as_str()
-        .strip_prefix('/')
-        .ok_or_else(|| UnknownError {
-            message: "path does not start with /",
-        })?;
-    if path.as_str().ends_with("/") && query.nodir != Some(true) {
-        directory_listing(s3path, ctx).await
+    let pathstr = path.as_str();
+    debug_assert!(pathstr.starts_with('/'));
+    if pathstr.ends_with("/") && query.nodir != Some(true) {
+        directory_listing(pathstr, ctx).await
     } else {
+        let s3path = pathstr
+            .strip_prefix('/')
+            .ok_or_else(|| warp::reject::not_found())?;
         match ctx
             .s3
             .head_object(HeadObjectRequest {
@@ -182,11 +179,11 @@ async fn request(
                 if query.nodir == Some(true) {
                     Err(warp::reject::not_found())
                 } else {
-                    let mut prefix = s3path.to_string();
-                    if !prefix.ends_with("/") {
-                        prefix.push('/');
+                    let mut base = pathstr.to_string();
+                    if !base.ends_with("/") {
+                        base.push('/');
                     }
-                    directory_listing(&prefix, ctx).await
+                    directory_listing(&base, ctx).await
                 }
             }
             Err(e) => Err(warp::reject::custom(S3Error {

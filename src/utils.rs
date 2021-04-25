@@ -1,14 +1,31 @@
+use warp::reject::Reject;
+
 pub fn get_parent(path: &str) -> Option<&str> {
+    debug_assert!(path.starts_with("/"));
+
     if path.is_empty() {
         None
     } else {
         let path = path.trim_end_matches('/');
         if let Some(slashi) = path.rfind('/') {
-            Some(&path[..slashi+1])
+            Some(&path[..slashi + 1])
         } else {
             Some("")
         }
     }
+}
+
+#[derive(Debug)]
+pub struct BadPathError {
+    path: String,
+}
+impl Reject for BadPathError {}
+
+pub fn path_to_key(path: &str) -> Result<&str, BadPathError> {
+    debug_assert!(path.starts_with("/"));
+    Ok(path
+        .strip_prefix('/')
+        .ok_or_else(|| BadPathError { path: path.into() })?)
 }
 
 #[cfg(test)]
@@ -17,21 +34,36 @@ mod test {
 
     #[test]
     fn get_parent_test_0() {
-        assert_eq!(get_parent(""), None);
+        assert_eq!(get_parent("/"), None);
     }
 
     #[test]
     fn get_parent_test_1() {
-        assert_eq!(get_parent("asdf"), Some(""));
+        assert_eq!(get_parent("/asdf"), Some("/"));
     }
 
     #[test]
     fn get_parent_test_2() {
-        assert_eq!(get_parent("asdf/"), Some(""));
+        assert_eq!(get_parent("/asdf/"), Some("/"));
     }
 
     #[test]
     fn get_parent_test_3() {
-        assert_eq!(get_parent("asdf/qwer"), Some("asdf/"));
+        assert_eq!(get_parent("/asdf/qwer"), Some("/asdf/"));
+    }
+
+    #[test]
+    fn path_to_key_test_0() {
+        assert_eq!(path_to_key("/asdf"), Ok("asdf"));
+    }
+
+    #[test]
+    fn path_to_key_test_1() {
+        assert_eq!(
+            path_to_key("asdf"),
+            Err(errors::BadPathError {
+                path: "asdf".into()
+            })
+        );
     }
 }

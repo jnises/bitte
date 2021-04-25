@@ -9,7 +9,7 @@
 
     <h1>{{path}}</h1>
     <p>
-        {{#if parent}}<a href="{{parent}}">..</a><br>{{/if}}
+        {{#if parent}}<a href="{{parent}}">⏎</a><br>{{/if}}
         {{#each items}}
         <a href="{{@root.path}}{{this}}">{{this}}</a><br>
         {{/each}}
