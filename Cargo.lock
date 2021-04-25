@@ -70,11 +70,11 @@ dependencies = [
  "handlebars",
  "lazy_static",
  "log",
+ "percent-encoding",
  "rusoto_core",
  "rusoto_s3",
  "serde",
  "tokio",
- "url",
  "warp",
 ]
 

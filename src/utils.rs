@@ -15,7 +15,7 @@ pub fn get_parent(path: &str) -> Option<&str> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct BadPathError {
     path: String,
 }
@@ -58,12 +58,8 @@ mod test {
     }
 
     #[test]
+    #[should_panic]
     fn path_to_key_test_1() {
-        assert_eq!(
-            path_to_key("asdf"),
-            Err(errors::BadPathError {
-                path: "asdf".into()
-            })
-        );
+        path_to_key("asdf").unwrap();
     }
 }
