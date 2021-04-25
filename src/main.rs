@@ -11,7 +11,7 @@ use rusoto_s3::{
     util::{PreSignedRequest, PreSignedRequestOption},
     GetObjectRequest, HeadObjectError, HeadObjectRequest, ListObjectsV2Request, S3Client, S3,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{borrow::Borrow, str::FromStr, sync::Arc, time::Duration};
 use warp::{
     http::uri::InvalidUri,
@@ -19,6 +19,8 @@ use warp::{
     path::FullPath,
     Filter,
 };
+mod utils;
+use utils::get_parent;
 
 lazy_static! {
     static ref REGION: Region = Region::Custom {
@@ -56,19 +58,25 @@ struct TemplateError {
 impl warp::reject::Reject for TemplateError {}
 
 #[derive(Debug)]
-struct UnknownError {}
+struct UnknownError {
+    message: &'static str,
+}
 impl warp::reject::Reject for UnknownError {}
+
+#[derive(Deserialize)]
+struct Query {
+    nodir: Option<bool>,
+}
 
 #[derive(Serialize)]
 struct DirectoryListingData<'a> {
-    // TODO use &str instead?
     title: &'a str,
     path: &'a str,
     parent: &'a str,
     items: Vec<&'a str>,
 }
 
-async fn directory_listing<'a>(
+async fn directory_listing(
     prefix: &str,
     ctx: Ctx,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
@@ -96,22 +104,14 @@ async fn directory_listing<'a>(
             if contents.is_empty() {
                 Err(warp::reject::not_found())
             } else {
-                let mut rit = prefix.trim_end_matches('/').rsplitn(2, '/');
-                dbg!(rit
-                    .next()
-                    .ok_or_else(|| warp::reject::custom(UnknownError {}))?);
-                let parent = &if let Some(parent) = rit.next() {
-                    format!("/{}/", parent)
-                } else {
-                    "".to_string()
-                };
+                let parent = if let Some(parent) = get_parent(prefix) { format!("/{}", parent) } else { "".into() };
                 dbg!(prefix);
-                dbg!(parent);
+                dbg!(&parent);
                 let data = DirectoryListingData {
                     // TODO change
                     title: "title",
                     path: &format!("/{}", prefix),
-                    parent,
+                    parent: &parent,
                     items: contents
                         .iter()
                         // TODO log None here
@@ -130,9 +130,18 @@ async fn directory_listing<'a>(
 }
 
 // TODO is there some way to avoid the box in the return?
-async fn request(path: FullPath, ctx: Ctx) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
-    let s3path = &path.as_str()[1..];
-    if path.as_str().ends_with("/") {
+async fn request(
+    path: FullPath,
+    query: Query,
+    ctx: Ctx,
+) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
+    let s3path = path
+        .as_str()
+        .strip_prefix('/')
+        .ok_or_else(|| UnknownError {
+            message: "path does not start with /",
+        })?;
+    if path.as_str().ends_with("/") && query.nodir != Some(true) {
         directory_listing(s3path, ctx).await
     } else {
         match ctx
@@ -170,11 +179,15 @@ async fn request(path: FullPath, ctx: Ctx) -> Result<Box<dyn warp::Reply>, warp:
                 status: StatusCode::NOT_FOUND,
                 ..
             })) => {
-                let mut prefix = s3path.to_string();
-                if !prefix.ends_with("/") {
-                    prefix.push('/');
+                if query.nodir == Some(true) {
+                    Err(warp::reject::not_found())
+                } else {
+                    let mut prefix = s3path.to_string();
+                    if !prefix.ends_with("/") {
+                        prefix.push('/');
+                    }
+                    directory_listing(&prefix, ctx).await
                 }
-                directory_listing(&prefix, ctx).await
             }
             Err(e) => Err(warp::reject::custom(S3Error {
                 inner: e,
@@ -205,16 +218,19 @@ async fn main() {
         .register_template_string("directory_listing", DIR_LIST_TEMPLATE)
         .expect("bad directory_listing template");
     let handlebars_arc = Arc::new(handlebars);
-    let route = warp::path::full().and_then(move |path: FullPath| {
-        request(
-            path,
-            Ctx {
-                s3: s3.clone(),
-                credentials: credentials.clone(),
-                handlebars: handlebars_arc.clone(),
-            },
-        )
-    });
+    let route = warp::path::full().and(warp::query::<Query>()).and_then(
+        move |path: FullPath, query: Query| {
+            request(
+                path,
+                query,
+                Ctx {
+                    s3: s3.clone(),
+                    credentials: credentials.clone(),
+                    handlebars: handlebars_arc.clone(),
+                },
+            )
+        },
+    );
 
     // TODO don't print errors in release
     // TODO access logging
