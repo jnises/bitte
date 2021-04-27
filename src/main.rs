@@ -2,6 +2,7 @@ use env_logger;
 use handlebars::{Handlebars, RenderError};
 use lazy_static::lazy_static;
 use log::{info, warn};
+use percent_encoding::{AsciiSet, CONTROLS};
 use rusoto_core::{
     credential::{AwsCredentials, DefaultCredentialsProvider, ProvideAwsCredentials},
     request::BufferedHttpResponse,
@@ -30,8 +31,8 @@ lazy_static! {
     };
 }
 const BUCKET: &'static str = "testbucket";
-
 const DIR_LIST_TEMPLATE: &'static str = include_str!("directory_listing.hbs");
+const PATH_SET: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'#').add(b'<').add(b'>').add(b'`').add(b'?').add(b'{').add(b'}');
 
 #[derive(Debug)]
 struct BadPresignedUrl {

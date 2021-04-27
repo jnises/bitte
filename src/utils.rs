@@ -1,3 +1,4 @@
+use percent_encoding::utf8_percent_encode;
 use warp::reject::Reject;
 
 pub fn get_parent(path: &str) -> Option<&str> {
@@ -26,6 +27,10 @@ pub fn path_to_key(path: &str) -> Result<&str, BadPathError> {
     Ok(path
         .strip_prefix('/')
         .ok_or_else(|| BadPathError { path: path.into() })?)
+}
+
+pub fn url_escape(path: &str) -> String {
+    utf8_percent_encode(path, percent_encoding::NON_ALPHANUMERIC).to_string()
 }
 
 #[cfg(test)]
