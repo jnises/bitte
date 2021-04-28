@@ -10,10 +10,12 @@ use rusoto_core::{
 };
 use rusoto_s3::{
     util::{PreSignedRequest, PreSignedRequestOption},
-    GetObjectRequest, HeadObjectError, HeadObjectRequest, ListObjectsV2Request, S3Client, S3, ListObjectsV2Error
+    GetObjectRequest, HeadObjectError, HeadObjectRequest, ListObjectsV2Error, ListObjectsV2Request,
+    S3Client, S3,
 };
 use serde::{Deserialize, Serialize};
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
+use thiserror::Error;
 use warp::{
     http::uri::InvalidUri,
     hyper::{StatusCode, Uri},
@@ -21,7 +23,6 @@ use warp::{
     reject::Reject,
     Filter,
 };
-use thiserror::Error;
 mod utils;
 use utils::{get_parent, path_to_key};
 
@@ -33,29 +34,36 @@ lazy_static! {
 }
 const BUCKET: &'static str = "testbucket";
 const DIR_LIST_TEMPLATE: &'static str = include_str!("directory_listing.hbs");
-const PATH_SET: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'#').add(b'<').add(b'>').add(b'`').add(b'?').add(b'{').add(b'}');
+const PATH_SET: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'<')
+    .add(b'>')
+    .add(b'`')
+    .add(b'?')
+    .add(b'{')
+    .add(b'}');
 
 #[derive(Error, Debug)]
-enum DirectoryListingError
-{
+enum DirectoryListingError {
     #[error("template error")]
     TemplateError(#[from] RenderError),
     #[error("s3 error")]
     S3Error(#[from] RusotoError<ListObjectsV2Error>),
 }
-impl Reject for DirectoryListingError
-{}
+impl Reject for DirectoryListingError {}
 
 #[derive(Error, Debug)]
-enum RequestError
-{
+enum RequestError {
     #[error("url presigning error")]
     BadPresignedUrl(#[from] InvalidUri),
     #[error("s3 error")]
     S3Error(#[from] RusotoError<HeadObjectError>),
+    #[error("encoding error")]
+    EncodingError(#[from] std::str::Utf8Error),
 }
-impl Reject for RequestError
-{}
+impl Reject for RequestError {}
 
 struct Ctx {
     s3: Arc<S3Client>,
@@ -134,8 +142,9 @@ async fn request(
     query: Query,
     ctx: Ctx,
 ) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
-    // TODO unescape path?
-    let pathstr = path.as_str();
+    let pathstr = &percent_encoding::percent_decode_str(path.as_str())
+        .decode_utf8()
+        .map_err(RequestError::EncodingError)?;
     dbg!(pathstr);
     debug_assert!(pathstr.starts_with('/'));
     if pathstr.ends_with("/") && query.nodir != Some(true) {
