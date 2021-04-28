@@ -10,10 +10,10 @@ use rusoto_core::{
 };
 use rusoto_s3::{
     util::{PreSignedRequest, PreSignedRequestOption},
-    GetObjectRequest, HeadObjectError, HeadObjectRequest, ListObjectsV2Request, S3Client, S3,
+    GetObjectRequest, HeadObjectError, HeadObjectRequest, ListObjectsV2Request, S3Client, S3, ListObjectsV2Error
 };
 use serde::{Deserialize, Serialize};
-use std::{str::FromStr, sync::Arc, time::Duration};
+use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 use warp::{
     http::uri::InvalidUri,
     hyper::{StatusCode, Uri},
@@ -21,6 +21,7 @@ use warp::{
     reject::Reject,
     Filter,
 };
+use thiserror::Error;
 mod utils;
 use utils::{get_parent, path_to_key};
 
@@ -34,30 +35,27 @@ const BUCKET: &'static str = "testbucket";
 const DIR_LIST_TEMPLATE: &'static str = include_str!("directory_listing.hbs");
 const PATH_SET: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'#').add(b'<').add(b'>').add(b'`').add(b'?').add(b'{').add(b'}');
 
-#[derive(Debug)]
-struct BadPresignedUrl {
-    inner: InvalidUri,
+#[derive(Error, Debug)]
+enum DirectoryListingError
+{
+    #[error("template error")]
+    TemplateError(#[from] RenderError),
+    #[error("s3 error")]
+    S3Error(#[from] RusotoError<ListObjectsV2Error>),
 }
-impl Reject for BadPresignedUrl {}
+impl Reject for DirectoryListingError
+{}
 
-#[derive(Debug)]
-struct S3Error<T> {
-    inner: RusotoError<T>,
-    path: String,
+#[derive(Error, Debug)]
+enum RequestError
+{
+    #[error("url presigning error")]
+    BadPresignedUrl(#[from] InvalidUri),
+    #[error("s3 error")]
+    S3Error(#[from] RusotoError<HeadObjectError>),
 }
-impl<T> Reject for S3Error<T> where T: std::fmt::Debug + Send + Sync + 'static {}
-
-#[derive(Debug)]
-struct TemplateError {
-    inner: RenderError,
-}
-impl Reject for TemplateError {}
-
-#[derive(Debug)]
-struct UnknownError {
-    message: &'static str,
-}
-impl Reject for UnknownError {}
+impl Reject for RequestError
+{}
 
 struct Ctx {
     s3: Arc<S3Client>,
@@ -91,12 +89,7 @@ async fn directory_listing(base: &str, ctx: &Ctx) -> Result<Box<dyn warp::Reply>
             ..Default::default()
         })
         .await
-        .map_err(|e| {
-            warp::reject::custom(S3Error {
-                inner: e,
-                path: base.into(),
-            })
-        })?;
+        .map_err(DirectoryListingError::S3Error)?;
     if list.is_truncated == Some(true) {
         warn!("list of ({}) has too many results", base);
     }
@@ -130,7 +123,7 @@ async fn directory_listing(base: &str, ctx: &Ctx) -> Result<Box<dyn warp::Reply>
         Ok(Box::new(warp::reply::html(
             ctx.handlebars
                 .render("directory_listing", &data)
-                .map_err(|e| TemplateError { inner: e })?,
+                .map_err(DirectoryListingError::TemplateError)?,
         )))
     }
 }
@@ -176,7 +169,7 @@ async fn request(
                 );
                 dbg!(&presigned);
                 Ok(Box::new(warp::redirect::temporary(
-                    Uri::from_str(&presigned).map_err(|e| BadPresignedUrl { inner: e })?,
+                    Uri::from_str(&presigned).map_err(RequestError::BadPresignedUrl)?,
                 )))
             }
             Err(RusotoError::Service(HeadObjectError::NoSuchKey(_)))
@@ -197,10 +190,7 @@ async fn request(
                     directory_listing(&base, &ctx).await
                 }
             }
-            Err(e) => Err(warp::reject::custom(S3Error {
-                inner: e,
-                path: path.as_str().into(),
-            })),
+            Err(e) => Err(warp::reject::custom(RequestError::S3Error(e))),
         }
     }
 }
