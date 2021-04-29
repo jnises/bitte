@@ -112,16 +112,12 @@ async fn directory_listing(base: &str, ctx: &Ctx) -> Result<Box<dyn warp::Reply>
     };
     let mut items = vec![];
     if let Some(ref common) = list.common_prefixes {
-        items.extend(
-            common
-                .iter()
-                .filter_map(|c| {
-                    // TODO log None here
-                    let name = c.prefix.as_deref()?.strip_prefix(prefix)?;
-                    let url = get_url(name);
-                    Some(DirectoryListingItem { name, url })
-                }),
-        );
+        items.extend(common.iter().filter_map(|c| {
+            // TODO log None here
+            let name = c.prefix.as_deref()?.strip_prefix(prefix)?;
+            let url = get_url(name);
+            Some(DirectoryListingItem { name, url })
+        }));
     }
     if let Some(ref contents) = list.contents {
         items.extend(
@@ -163,7 +159,6 @@ async fn request(
     let pathstr = &percent_encoding::percent_decode_str(path.as_str())
         .decode_utf8()
         .map_err(RequestError::EncodingError)?;
-    dbg!(pathstr);
     debug_assert!(pathstr.starts_with('/'));
     if pathstr.ends_with("/") && query.nodir != Some(true) {
         directory_listing(pathstr, &ctx).await
@@ -194,7 +189,6 @@ async fn request(
                         expires_in: Duration::from_secs(60 * 60 * 24),
                     },
                 );
-                dbg!(&presigned);
                 Ok(Box::new(warp::redirect::temporary(
                     Uri::from_str(&presigned).map_err(RequestError::BadPresignedUrl)?,
                 )))
