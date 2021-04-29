@@ -14,7 +14,7 @@ use rusoto_s3::{
     S3Client, S3,
 };
 use serde::{Deserialize, Serialize};
-use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
+use std::{str::FromStr, sync::Arc, time::Duration};
 use thiserror::Error;
 use warp::{
     http::uri::InvalidUri,
@@ -78,11 +78,17 @@ struct Query {
 }
 
 #[derive(Serialize)]
+struct DirectoryListingItem<'a> {
+    name: &'a str,
+    url: String,
+}
+
+#[derive(Serialize)]
 struct DirectoryListingData<'a> {
     title: &'a str,
     path: &'a str,
     parent: &'a str,
-    items: Vec<&'a str>,
+    items: Vec<DirectoryListingItem<'a>>,
 }
 
 async fn directory_listing(base: &str, ctx: &Ctx) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
@@ -101,12 +107,20 @@ async fn directory_listing(base: &str, ctx: &Ctx) -> Result<Box<dyn warp::Reply>
     if list.is_truncated == Some(true) {
         warn!("list of ({}) has too many results", base);
     }
+    let get_url = |name: &str| {
+        percent_encoding::utf8_percent_encode(&format!("{}{}", base, name), PATH_SET).to_string()
+    };
     let mut items = vec![];
     if let Some(ref common) = list.common_prefixes {
         items.extend(
             common
                 .iter()
-                .filter_map(|c| c.prefix.as_deref()?.strip_prefix(prefix)),
+                .filter_map(|c| {
+                    // TODO log None here
+                    let name = c.prefix.as_deref()?.strip_prefix(prefix)?;
+                    let url = get_url(name);
+                    Some(DirectoryListingItem { name, url })
+                }),
         );
     }
     if let Some(ref contents) = list.contents {
@@ -115,7 +129,11 @@ async fn directory_listing(base: &str, ctx: &Ctx) -> Result<Box<dyn warp::Reply>
                 .iter()
                 // TODO handle keys that end with /
                 // TODO log None here
-                .filter_map(|c| Some(c.key.as_deref()?.strip_prefix(prefix)?)),
+                .filter_map(|c| {
+                    let name = c.key.as_deref()?.strip_prefix(prefix)?;
+                    let url = get_url(name);
+                    Some(DirectoryListingItem { name, url })
+                }),
         );
     }
     if items.is_empty() {
