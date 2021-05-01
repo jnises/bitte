@@ -50,6 +50,7 @@ struct Ctx {
     bucket: Arc<String>,
     region: Arc<Region>,
     credentials: Arc<AwsCredentials>,
+    // TODO put this in a struct along with the directory listing stuff to keep them together
     handlebars: Arc<Handlebars<'static>>,
 }
 
