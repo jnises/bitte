@@ -53,6 +53,7 @@ struct Ctx {
     handlebars: Arc<Handlebars<'static>>,
 }
 
+// TODO move directory listing stuff to separate file
 #[derive(Serialize)]
 struct DirectoryListingItem {
     name: String,
