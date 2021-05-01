@@ -1,7 +1,7 @@
 use env_logger;
 use handlebars::{Handlebars, RenderError};
 use lazy_static::lazy_static;
-use log::{info, warn};
+use log::warn;
 use percent_encoding::{AsciiSet, CONTROLS};
 use rusoto_core::{
     credential::{AwsCredentials, DefaultCredentialsProvider, ProvideAwsCredentials},
@@ -13,7 +13,7 @@ use rusoto_s3::{
     GetObjectRequest, HeadObjectError, HeadObjectRequest, ListObjectsV2Error, ListObjectsV2Request,
     S3Client, S3,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::{str::FromStr, sync::Arc, time::Duration};
 use thiserror::Error;
 use warp::{
@@ -69,12 +69,6 @@ struct Ctx {
     s3: Arc<S3Client>,
     credentials: Arc<AwsCredentials>,
     handlebars: Arc<Handlebars<'static>>,
-}
-
-#[derive(Deserialize)]
-struct Query {
-    // TODO does this even work with the delimiter common_prefixes thing?
-    nodir: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -151,16 +145,12 @@ async fn directory_listing(base: &str, ctx: &Ctx) -> Result<Box<dyn warp::Reply>
 }
 
 // TODO is there some way to avoid the box in the return?
-async fn request(
-    path: FullPath,
-    query: Query,
-    ctx: Ctx,
-) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
+async fn request(path: FullPath, ctx: Ctx) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
     let pathstr = &percent_encoding::percent_decode_str(path.as_str())
         .decode_utf8()
         .map_err(RequestError::EncodingError)?;
     debug_assert!(pathstr.starts_with('/'));
-    if pathstr.ends_with("/") && query.nodir != Some(true) {
+    if pathstr.ends_with("/") {
         directory_listing(pathstr, &ctx).await
     } else {
         let s3path = pathstr
@@ -200,16 +190,7 @@ async fn request(
                 status: StatusCode::NOT_FOUND,
                 ..
             })) => {
-                info!("not found");
-                if query.nodir == Some(true) {
-                    Err(warp::reject::not_found())
-                } else {
-                    let mut base = pathstr.to_string();
-                    if !base.ends_with("/") {
-                        base.push('/');
-                    }
-                    directory_listing(&base, &ctx).await
-                }
+                Err(warp::reject::not_found())
             }
             Err(e) => Err(warp::reject::custom(RequestError::S3Error(e))),
         }
@@ -237,19 +218,16 @@ async fn main() {
         .register_template_string("directory_listing", DIR_LIST_TEMPLATE)
         .expect("bad directory_listing template");
     let handlebars_arc = Arc::new(handlebars);
-    let route = warp::path::full().and(warp::query::<Query>()).and_then(
-        move |path: FullPath, query: Query| {
-            request(
-                path,
-                query,
-                Ctx {
-                    s3: s3.clone(),
-                    credentials: credentials.clone(),
-                    handlebars: handlebars_arc.clone(),
-                },
-            )
-        },
-    );
+    let route = warp::path::full().and_then(move |path: FullPath| {
+        request(
+            path,
+            Ctx {
+                s3: s3.clone(),
+                credentials: credentials.clone(),
+                handlebars: handlebars_arc.clone(),
+            },
+        )
+    });
 
     // TODO don't print errors in release
     // TODO access logging
