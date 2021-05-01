@@ -53,5 +53,5 @@ mod test {
     #[should_panic]
     fn get_parent_test_4() {
         let _ = get_parent("asdf");
-    }    
+    }
 }
