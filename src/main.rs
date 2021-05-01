@@ -60,8 +60,8 @@ struct Ctx {
 }
 
 #[derive(Serialize)]
-struct DirectoryListingItem<'a> {
-    name: &'a str,
+struct DirectoryListingItem {
+    name: String,
     url: String,
 }
 
@@ -70,47 +70,59 @@ struct DirectoryListingData<'a> {
     title: &'a str,
     path: &'a str,
     parent: &'a str,
-    items: Vec<DirectoryListingItem<'a>>,
+    items: Vec<DirectoryListingItem>,
 }
 
 async fn directory_listing(base: &str, ctx: &Ctx) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
     debug_assert!(base.is_empty() || base.ends_with('/'));
-    // TODO use pagination
-    let list = ctx
-        .s3
-        .list_objects_v2(ListObjectsV2Request {
-            bucket: BUCKET.into(),
-            prefix: Some(base.into()),
-            delimiter: Some("/".into()),
-            ..Default::default()
-        })
-        .await
-        .map_err(DirectoryListingError::S3Error)?;
-    if list.is_truncated == Some(true) {
-        warn!("list of ({}) has too many results", base);
-    }
     let get_url = |name: &str| url_encode(&format!("/{}{}", base, name));
     let mut items = vec![];
-    if let Some(ref common) = list.common_prefixes {
-        items.extend(common.iter().filter_map(|c| {
-            // TODO log None here
-            let name = c.prefix.as_deref()?.strip_prefix(base)?;
-            let url = get_url(name);
-            Some(DirectoryListingItem { name, url })
-        }));
-    }
-    if let Some(ref contents) = list.contents {
-        items.extend(
-            contents
-                .iter()
-                // TODO handle keys that end with /
+    let mut continuation_token = None;
+    loop {
+        // TODO use pagination
+        let list = ctx
+            .s3
+            .list_objects_v2(ListObjectsV2Request {
+                bucket: BUCKET.into(),
+                prefix: Some(base.into()),
+                delimiter: Some("/".into()),
+                max_keys: Some(2),
+                continuation_token: continuation_token.take(),
+                ..Default::default()
+            })
+            .await
+            .map_err(DirectoryListingError::S3Error)?;
+        continuation_token = list.next_continuation_token;
+        if list.is_truncated == Some(true) {
+            warn!("list of ({}) has too many results", base);
+        }
+        if let Some(ref common) = list.common_prefixes {
+            items.extend(common.iter().filter_map(|c| {
                 // TODO log None here
-                .filter_map(|c| {
-                    let name = c.key.as_deref()?.strip_prefix(base)?;
-                    let url = get_url(name);
-                    Some(DirectoryListingItem { name, url })
-                }),
-        );
+                let name = c.prefix.as_deref()?.strip_prefix(base)?.to_string();
+                let url = get_url(&name);
+                Some(DirectoryListingItem { name, url })
+            }));
+        }
+        if let Some(ref contents) = list.contents {
+            items.extend(
+                contents
+                    .iter()
+                    // TODO handle keys that end with /
+                    // TODO log None here
+                    .filter_map(|c| {
+                        let name = c.key.as_deref()?.strip_prefix(base)?.to_string();
+                        if name.ends_with('/') {
+                            warn!("bad key found ({})", name);
+                        }
+                        let url = get_url(&name);
+                        Some(DirectoryListingItem { name, url })
+                    }),
+            );
+        }
+        if continuation_token.is_none() {
+            break;
+        }
     }
     if items.is_empty() {
         Err(warp::reject::not_found())
