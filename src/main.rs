@@ -1,6 +1,5 @@
 use env_logger;
 use handlebars::{Handlebars, RenderError};
-use lazy_static::lazy_static;
 use log::warn;
 use rusoto_core::{
     credential::{AwsCredentials, DefaultCredentialsProvider, ProvideAwsCredentials},
@@ -18,12 +17,6 @@ use warp::{http::uri::InvalidUri, hyper::Uri, path::FullPath, reject::Reject, Fi
 mod utils;
 use utils::{get_parent, url_encode};
 
-lazy_static! {
-    static ref REGION: Region = Region::Custom {
-        name: "local".to_string(),
-        endpoint: "http://127.0.0.1:9000".to_string()
-    };
-}
 const DIR_LIST_TEMPLATE: &'static str = include_str!("directory_listing.hbs");
 
 #[derive(Error, Debug)]
@@ -49,6 +42,7 @@ impl Reject for RequestError {}
 struct Ctx {
     s3: Arc<S3Client>,
     bucket: Arc<String>,
+    region: Arc<Region>,
     credentials: Arc<AwsCredentials>,
     handlebars: Arc<Handlebars<'static>>,
 }
@@ -170,7 +164,7 @@ async fn request(path: FullPath, ctx: Ctx) -> Result<Box<dyn warp::Reply>, warp:
             ..Default::default()
         };
         let presigned = req.get_presigned_url(
-            &REGION,
+            &ctx.region,
             &ctx.credentials,
             &PreSignedRequestOption {
                 expires_in: Duration::from_secs(60 * 60 * 24),
@@ -203,8 +197,16 @@ async fn main() {
         .format_module_path(false)
         .init();
     let opt = Opt::from_args();
-    let arcbucket = Arc::new(opt.bucket);
-    let s3 = Arc::new(S3Client::new(REGION.clone()));
+    let region = if let Some(endpoint) = opt.endpoint {
+        Region::Custom{ name: opt.region.unwrap_or_else(|| "custom".into()), endpoint }
+    } else {
+        if let Some(region) = opt.region {
+            Region::from_str(&region).expect("bad region provided")
+        } else {
+            Region::default()
+        }
+    };
+    let s3 = Arc::new(S3Client::new(region.clone()));
     let credentials = Arc::new(
         DefaultCredentialsProvider::new()
             .unwrap()
@@ -218,12 +220,15 @@ async fn main() {
         .register_template_string("directory_listing", DIR_LIST_TEMPLATE)
         .expect("bad directory_listing template");
     let handlebars_arc = Arc::new(handlebars);
+    let region_arc = Arc::new(region);
+    let bucket_arc = Arc::new(opt.bucket);
     let route = warp::path::full().and_then(move |path: FullPath| {
         request(
             path,
             Ctx {
                 s3: s3.clone(),
-                bucket: arcbucket.clone(),
+                bucket: bucket_arc.clone(),
+                region: region_arc.clone(),
                 credentials: credentials.clone(),
                 handlebars: handlebars_arc.clone(),
             },
