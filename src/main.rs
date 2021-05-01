@@ -8,19 +8,12 @@ use rusoto_core::{
 };
 use rusoto_s3::{
     util::{PreSignedRequest, PreSignedRequestOption},
-    GetObjectRequest, HeadObjectError, ListObjectsV2Error, ListObjectsV2Request,
-    S3Client, S3,
+    GetObjectRequest, HeadObjectError, ListObjectsV2Error, ListObjectsV2Request, S3Client, S3,
 };
 use serde::Serialize;
 use std::{str::FromStr, sync::Arc, time::Duration};
 use thiserror::Error;
-use warp::{
-    http::uri::InvalidUri,
-    hyper::Uri,
-    path::FullPath,
-    reject::Reject,
-    Filter,
-};
+use warp::{http::uri::InvalidUri, hyper::Uri, path::FullPath, reject::Reject, Filter};
 mod utils;
 use utils::{get_parent, url_encode};
 
@@ -75,8 +68,8 @@ struct DirectoryListingData<'a> {
 
 async fn directory_listing(base: &str, ctx: &Ctx) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
     debug_assert!(base.is_empty() || base.ends_with('/'));
-    let get_url = |name: &str| url_encode(&format!("/{}{}", base, name));
-    let mut items = vec![];
+    let mut dirs: Vec<String> = vec![];
+    let mut files: Vec<String> = vec![];
     let mut continuation_token = None;
     loop {
         // TODO use pagination
@@ -86,47 +79,57 @@ async fn directory_listing(base: &str, ctx: &Ctx) -> Result<Box<dyn warp::Reply>
                 bucket: BUCKET.into(),
                 prefix: Some(base.into()),
                 delimiter: Some("/".into()),
-                max_keys: Some(2),
                 continuation_token: continuation_token.take(),
                 ..Default::default()
             })
             .await
             .map_err(DirectoryListingError::S3Error)?;
         continuation_token = list.next_continuation_token;
-        if list.is_truncated == Some(true) {
-            warn!("list of ({}) has too many results", base);
-        }
-        if let Some(ref common) = list.common_prefixes {
-            items.extend(common.iter().filter_map(|c| {
-                // TODO log None here
-                let name = c.prefix.as_deref()?.strip_prefix(base)?.to_string();
-                let url = get_url(&name);
-                Some(DirectoryListingItem { name, url })
+        if let Some(common) = list.common_prefixes {
+            dirs.extend(common.into_iter().filter_map(|c| {
+                let p = c.prefix.or_else(|| {
+                    warn!("none in s3 listing common_prefixes");
+                    None
+                })?;
+                p.strip_prefix(base).map(Into::into).or_else(|| {
+                    warn!("common prefix without expected prefix found ({})", p);
+                    None
+                })
             }));
         }
-        if let Some(ref contents) = list.contents {
-            items.extend(
-                contents
-                    .iter()
-                    // TODO handle keys that end with /
-                    // TODO log None here
-                    .filter_map(|c| {
-                        let name = c.key.as_deref()?.strip_prefix(base)?.to_string();
-                        if name.ends_with('/') {
-                            warn!("bad key found ({})", name);
-                        }
-                        let url = get_url(&name);
-                        Some(DirectoryListingItem { name, url })
-                    }),
-            );
+        if let Some(contents) = list.contents {
+            files.extend(contents.into_iter().filter_map(|c| -> Option<String> {
+                let key = c.key.or_else(|| {
+                    warn!("none key in s3 listing contents");
+                    None
+                })?;
+                if key.ends_with('/') {
+                    warn!("key ending with / found ({})", key);
+                    return None;
+                }
+                key.strip_prefix(base).map(Into::into).or_else(|| {
+                    warn!("key without expected prefix found ({})", key);
+                    None
+                })
+            }));
         }
         if continuation_token.is_none() {
             break;
         }
     }
-    if items.is_empty() {
+    if dirs.is_empty() && files.is_empty() {
         Err(warp::reject::not_found())
     } else {
+        let get_url = |name: &str| url_encode(&format!("/{}{}", base, name));
+        let mut items = Vec::with_capacity(dirs.len() + files.len());
+        items.extend(dirs.into_iter().map(|name| {
+            let url = get_url(&name);
+            DirectoryListingItem { name, url }
+        }));
+        items.extend(files.into_iter().map(|name| {
+            let url = get_url(&name);
+            DirectoryListingItem { name, url }
+        }));
         let basepath = &format!("/{}", base);
         let parentpath = get_parent(&base);
         let parent = url_encode(&if let Some(parent) = parentpath {
@@ -153,7 +156,9 @@ async fn request(path: FullPath, ctx: Ctx) -> Result<Box<dyn warp::Reply>, warp:
     let pathstr = &percent_encoding::percent_decode_str(path.as_str())
         .decode_utf8()
         .map_err(RequestError::EncodingError)?;
-    let pathstr = pathstr.strip_prefix("/").ok_or_else(|| warp::reject::not_found())?;
+    let pathstr = pathstr
+        .strip_prefix("/")
+        .ok_or_else(|| warp::reject::not_found())?;
     if pathstr.is_empty() || pathstr.ends_with("/") {
         directory_listing(pathstr, &ctx).await
     } else {
