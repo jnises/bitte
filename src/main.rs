@@ -5,12 +5,11 @@ use log::warn;
 use percent_encoding::{AsciiSet, CONTROLS};
 use rusoto_core::{
     credential::{AwsCredentials, DefaultCredentialsProvider, ProvideAwsCredentials},
-    request::BufferedHttpResponse,
     Region, RusotoError,
 };
 use rusoto_s3::{
     util::{PreSignedRequest, PreSignedRequestOption},
-    GetObjectRequest, HeadObjectError, HeadObjectRequest, ListObjectsV2Error, ListObjectsV2Request,
+    GetObjectRequest, HeadObjectError, ListObjectsV2Error, ListObjectsV2Request,
     S3Client, S3,
 };
 use serde::Serialize;
@@ -18,7 +17,7 @@ use std::{str::FromStr, sync::Arc, time::Duration};
 use thiserror::Error;
 use warp::{
     http::uri::InvalidUri,
-    hyper::{StatusCode, Uri},
+    hyper::Uri,
     path::FullPath,
     reject::Reject,
     Filter,
@@ -156,44 +155,21 @@ async fn request(path: FullPath, ctx: Ctx) -> Result<Box<dyn warp::Reply>, warp:
         let s3path = pathstr
             .strip_prefix('/')
             .ok_or_else(|| warp::reject::not_found())?;
-        match ctx
-            .s3
-            .head_object(HeadObjectRequest {
-                bucket: BUCKET.into(),
-                key: s3path.into(),
-                ..Default::default()
-            })
-            .await
-        {
-            Ok(_) => {
-                // TODO handle glacier
-                let req = GetObjectRequest {
-                    bucket: BUCKET.into(),
-                    key: s3path.into(),
-                    ..Default::default()
-                };
-                let presigned = req.get_presigned_url(
-                    &REGION,
-                    &ctx.credentials,
-                    &PreSignedRequestOption {
-                        expires_in: Duration::from_secs(60 * 60 * 24),
-                    },
-                );
-                Ok(Box::new(warp::redirect::temporary(
-                    Uri::from_str(&presigned).map_err(RequestError::BadPresignedUrl)?,
-                )))
-            }
-            Err(RusotoError::Service(HeadObjectError::NoSuchKey(_)))
-            // bug in rusoto means NoSuchKey will not be returned if key doesn't exist (https://github.com/rusoto/rusoto/issues/716)
-            // so we check manually
-            | Err(RusotoError::Unknown(BufferedHttpResponse {
-                status: StatusCode::NOT_FOUND,
-                ..
-            })) => {
-                Err(warp::reject::not_found())
-            }
-            Err(e) => Err(warp::reject::custom(RequestError::S3Error(e))),
-        }
+        let req = GetObjectRequest {
+            bucket: BUCKET.into(),
+            key: s3path.into(),
+            ..Default::default()
+        };
+        let presigned = req.get_presigned_url(
+            &REGION,
+            &ctx.credentials,
+            &PreSignedRequestOption {
+                expires_in: Duration::from_secs(60 * 60 * 24),
+            },
+        );
+        Ok(Box::new(warp::redirect::temporary(
+            Uri::from_str(&presigned).map_err(RequestError::BadPresignedUrl)?,
+        )))
     }
 }
 
