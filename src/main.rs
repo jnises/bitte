@@ -12,6 +12,7 @@ use rusoto_s3::{
 };
 use serde::Serialize;
 use std::{str::FromStr, sync::Arc, time::Duration};
+use structopt::StructOpt;
 use thiserror::Error;
 use warp::{http::uri::InvalidUri, hyper::Uri, path::FullPath, reject::Reject, Filter};
 mod utils;
@@ -23,7 +24,6 @@ lazy_static! {
         endpoint: "http://127.0.0.1:9000".to_string()
     };
 }
-const BUCKET: &'static str = "testbucket";
 const DIR_LIST_TEMPLATE: &'static str = include_str!("directory_listing.hbs");
 
 #[derive(Error, Debug)]
@@ -48,6 +48,7 @@ impl Reject for RequestError {}
 
 struct Ctx {
     s3: Arc<S3Client>,
+    bucket: Arc<String>,
     credentials: Arc<AwsCredentials>,
     handlebars: Arc<Handlebars<'static>>,
 }
@@ -76,7 +77,7 @@ async fn directory_listing(base: &str, ctx: &Ctx) -> Result<Box<dyn warp::Reply>
         let list = ctx
             .s3
             .list_objects_v2(ListObjectsV2Request {
-                bucket: BUCKET.into(),
+                bucket: (*ctx.bucket).clone(),
                 prefix: Some(base.into()),
                 delimiter: Some("/".into()),
                 continuation_token: continuation_token.take(),
@@ -164,7 +165,7 @@ async fn request(path: FullPath, ctx: Ctx) -> Result<Box<dyn warp::Reply>, warp:
     } else {
         // TODO head object before presigning? check commit history for some of that code.
         let req = GetObjectRequest {
-            bucket: BUCKET.into(),
+            bucket: (*ctx.bucket).clone(),
             key: pathstr.into(),
             ..Default::default()
         };
@@ -181,6 +182,19 @@ async fn request(path: FullPath, ctx: Ctx) -> Result<Box<dyn warp::Reply>, warp:
     }
 }
 
+#[derive(StructOpt, Debug)]
+#[structopt(name = "bitte")]
+struct Opt {
+    #[structopt(long)]
+    bucket: String,
+
+    #[structopt(long)]
+    region: Option<String>,
+
+    #[structopt(long)]
+    endpoint: Option<String>,
+}
+
 #[tokio::main]
 async fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
@@ -188,6 +202,8 @@ async fn main() {
         .format_timestamp(None)
         .format_module_path(false)
         .init();
+    let opt = Opt::from_args();
+    let arcbucket = Arc::new(opt.bucket);
     let s3 = Arc::new(S3Client::new(REGION.clone()));
     let credentials = Arc::new(
         DefaultCredentialsProvider::new()
@@ -207,6 +223,7 @@ async fn main() {
             path,
             Ctx {
                 s3: s3.clone(),
+                bucket: arcbucket.clone(),
                 credentials: credentials.clone(),
                 handlebars: handlebars_arc.clone(),
             },
