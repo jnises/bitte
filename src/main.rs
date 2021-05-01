@@ -1,3 +1,4 @@
+#![warn(clippy::all)]
 use env_logger;
 use handlebars::{Handlebars, RenderError};
 use log::warn;
