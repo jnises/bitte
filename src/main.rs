@@ -10,10 +10,16 @@ use rusoto_s3::{
     GetObjectRequest, HeadObjectError, ListObjectsV2Error, ListObjectsV2Request, S3Client, S3,
 };
 use serde::Serialize;
-use std::{str::FromStr, sync::Arc, time::Duration};
+use std::{convert::Infallible, str::FromStr, sync::Arc, time::Duration};
 use structopt::StructOpt;
 use thiserror::Error;
-use warp::{http::uri::InvalidUri, hyper::Uri, path::FullPath, reject::Reject, Filter};
+use warp::{
+    http::uri::InvalidUri,
+    hyper::{StatusCode, Uri},
+    path::FullPath,
+    reject::Reject,
+    Filter, Rejection,
+};
 mod utils;
 use utils::{get_parent, url_encode};
 
@@ -61,7 +67,7 @@ struct DirectoryListingData<'a> {
     items: Vec<DirectoryListingItem>,
 }
 
-async fn directory_listing(base: &str, ctx: &Ctx) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
+async fn directory_listing(base: &str, ctx: &Ctx) -> Result<Box<dyn warp::Reply>, Rejection> {
     debug_assert!(base.is_empty() || base.ends_with('/'));
     let mut dirs: Vec<String> = vec![];
     let mut files: Vec<String> = vec![];
@@ -147,7 +153,7 @@ async fn directory_listing(base: &str, ctx: &Ctx) -> Result<Box<dyn warp::Reply>
 }
 
 // TODO is there some way to avoid the box in the return?
-async fn request(path: FullPath, ctx: Ctx) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
+async fn request(path: FullPath, ctx: Ctx) -> Result<Box<dyn warp::Reply>, Rejection> {
     let pathstr = &percent_encoding::percent_decode_str(path.as_str())
         .decode_utf8()
         .map_err(RequestError::EncodingError)?;
@@ -176,6 +182,25 @@ async fn request(path: FullPath, ctx: Ctx) -> Result<Box<dyn warp::Reply>, warp:
     }
 }
 
+async fn handle_errors(e: Rejection) -> Result<impl warp::Reply, Infallible> {
+    let code;
+    let message;
+
+    if e.is_not_found() {
+        code = StatusCode::NOT_FOUND;
+        message = "NOT_FOUND";
+    } else if let Some(_) = e.find::<warp::reject::MethodNotAllowed>() {
+        code = StatusCode::METHOD_NOT_ALLOWED;
+        message = "METHOD_NOT_ALLOWED";
+    } else {
+        warn!("unhandled rejection: {:?}", e);
+        code = StatusCode::INTERNAL_SERVER_ERROR;
+        message = "UNHANDLED_ERROR";
+    }
+
+    Ok(warp::reply::with_status(message, code))
+}
+
 #[derive(StructOpt, Debug)]
 #[structopt(name = "bitte")]
 struct Opt {
@@ -198,7 +223,10 @@ async fn main() {
         .init();
     let opt = Opt::from_args();
     let region = if let Some(endpoint) = opt.endpoint {
-        Region::Custom{ name: opt.region.unwrap_or_else(|| "custom".into()), endpoint }
+        Region::Custom {
+            name: opt.region.unwrap_or_else(|| "custom".into()),
+            endpoint,
+        }
     } else {
         if let Some(region) = opt.region {
             Region::from_str(&region).expect("bad region provided")
@@ -222,20 +250,21 @@ async fn main() {
     let handlebars_arc = Arc::new(handlebars);
     let region_arc = Arc::new(region);
     let bucket_arc = Arc::new(opt.bucket);
-    let route = warp::path::full().and_then(move |path: FullPath| {
-        request(
-            path,
-            Ctx {
-                s3: s3.clone(),
-                bucket: bucket_arc.clone(),
-                region: region_arc.clone(),
-                credentials: credentials.clone(),
-                handlebars: handlebars_arc.clone(),
-            },
-        )
-    });
+    let route = warp::path::full()
+        .and_then(move |path: FullPath| {
+            request(
+                path,
+                Ctx {
+                    s3: s3.clone(),
+                    bucket: bucket_arc.clone(),
+                    region: region_arc.clone(),
+                    credentials: credentials.clone(),
+                    handlebars: handlebars_arc.clone(),
+                },
+            )
+        })
+        .recover(handle_errors);
 
-    // TODO don't print errors in release
     // TODO access logging
     warp::serve(route).run(([127, 0, 0, 1], 3030)).await;
 }
