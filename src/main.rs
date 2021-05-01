@@ -23,7 +23,7 @@ use warp::{
     Filter,
 };
 mod utils;
-use utils::{get_parent, path_to_key};
+use utils::get_parent;
 
 lazy_static! {
     static ref REGION: Region = Region::Custom {
@@ -43,6 +43,10 @@ const PATH_SET: &AsciiSet = &CONTROLS
     .add(b'?')
     .add(b'{')
     .add(b'}');
+
+fn url_encode(path: &str) -> String {
+    percent_encoding::utf8_percent_encode(path, PATH_SET).to_string()
+}
 
 #[derive(Error, Debug)]
 enum DirectoryListingError {
@@ -85,13 +89,13 @@ struct DirectoryListingData<'a> {
 }
 
 async fn directory_listing(base: &str, ctx: &Ctx) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
-    let prefix = path_to_key(base)?;
+    debug_assert!(base.is_empty() || base.ends_with('/'));
     // TODO use pagination
     let list = ctx
         .s3
         .list_objects_v2(ListObjectsV2Request {
             bucket: BUCKET.into(),
-            prefix: Some(prefix.into()),
+            prefix: Some(base.into()),
             delimiter: Some("/".into()),
             ..Default::default()
         })
@@ -100,14 +104,12 @@ async fn directory_listing(base: &str, ctx: &Ctx) -> Result<Box<dyn warp::Reply>
     if list.is_truncated == Some(true) {
         warn!("list of ({}) has too many results", base);
     }
-    let get_url = |name: &str| {
-        percent_encoding::utf8_percent_encode(&format!("{}{}", base, name), PATH_SET).to_string()
-    };
+    let get_url = |name: &str| url_encode(&format!("/{}{}", base, name));
     let mut items = vec![];
     if let Some(ref common) = list.common_prefixes {
         items.extend(common.iter().filter_map(|c| {
             // TODO log None here
-            let name = c.prefix.as_deref()?.strip_prefix(prefix)?;
+            let name = c.prefix.as_deref()?.strip_prefix(base)?;
             let url = get_url(name);
             Some(DirectoryListingItem { name, url })
         }));
@@ -119,7 +121,7 @@ async fn directory_listing(base: &str, ctx: &Ctx) -> Result<Box<dyn warp::Reply>
                 // TODO handle keys that end with /
                 // TODO log None here
                 .filter_map(|c| {
-                    let name = c.key.as_deref()?.strip_prefix(prefix)?;
+                    let name = c.key.as_deref()?.strip_prefix(base)?;
                     let url = get_url(name);
                     Some(DirectoryListingItem { name, url })
                 }),
@@ -128,11 +130,17 @@ async fn directory_listing(base: &str, ctx: &Ctx) -> Result<Box<dyn warp::Reply>
     if items.is_empty() {
         Err(warp::reject::not_found())
     } else {
-        let parent = get_parent(base).unwrap_or("");
+        let basepath = &format!("/{}", base);
+        let parentpath = get_parent(&base);
+        let parent = url_encode(&if let Some(parent) = parentpath {
+            format!("/{}", parent)
+        } else {
+            "".into()
+        });
         let data = DirectoryListingData {
-            title: base,
-            path: base,
-            parent,
+            title: basepath,
+            path: basepath,
+            parent: &parent,
             items,
         };
         Ok(Box::new(warp::reply::html(
@@ -148,16 +156,14 @@ async fn request(path: FullPath, ctx: Ctx) -> Result<Box<dyn warp::Reply>, warp:
     let pathstr = &percent_encoding::percent_decode_str(path.as_str())
         .decode_utf8()
         .map_err(RequestError::EncodingError)?;
-    debug_assert!(pathstr.starts_with('/'));
-    if pathstr.ends_with("/") {
+    let pathstr = pathstr.strip_prefix("/").ok_or_else(|| warp::reject::not_found())?;
+    if pathstr.is_empty() || pathstr.ends_with("/") {
         directory_listing(pathstr, &ctx).await
     } else {
-        let s3path = pathstr
-            .strip_prefix('/')
-            .ok_or_else(|| warp::reject::not_found())?;
+        // TODO head object before presigning? check commit history for some of that code.
         let req = GetObjectRequest {
             bucket: BUCKET.into(),
-            key: s3path.into(),
+            key: pathstr.into(),
             ..Default::default()
         };
         let presigned = req.get_presigned_url(
