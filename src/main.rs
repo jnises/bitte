@@ -2,7 +2,6 @@ use env_logger;
 use handlebars::{Handlebars, RenderError};
 use lazy_static::lazy_static;
 use log::warn;
-use percent_encoding::{AsciiSet, CONTROLS};
 use rusoto_core::{
     credential::{AwsCredentials, DefaultCredentialsProvider, ProvideAwsCredentials},
     Region, RusotoError,
@@ -23,7 +22,7 @@ use warp::{
     Filter,
 };
 mod utils;
-use utils::get_parent;
+use utils::{get_parent, url_encode};
 
 lazy_static! {
     static ref REGION: Region = Region::Custom {
@@ -33,20 +32,6 @@ lazy_static! {
 }
 const BUCKET: &'static str = "testbucket";
 const DIR_LIST_TEMPLATE: &'static str = include_str!("directory_listing.hbs");
-const PATH_SET: &AsciiSet = &CONTROLS
-    .add(b' ')
-    .add(b'"')
-    .add(b'#')
-    .add(b'<')
-    .add(b'>')
-    .add(b'`')
-    .add(b'?')
-    .add(b'{')
-    .add(b'}');
-
-fn url_encode(path: &str) -> String {
-    percent_encoding::utf8_percent_encode(path, PATH_SET).to_string()
-}
 
 #[derive(Error, Debug)]
 enum DirectoryListingError {

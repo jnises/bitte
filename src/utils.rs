@@ -1,3 +1,5 @@
+use percent_encoding::{AsciiSet, CONTROLS};
+
 pub fn get_parent(path: &str) -> Option<&str> {
     debug_assert!(path.is_empty() || path.ends_with("/"));
     let path = path.strip_suffix('/')?;
@@ -6,6 +8,21 @@ pub fn get_parent(path: &str) -> Option<&str> {
     } else {
         Some("")
     }
+}
+
+const PATH_SET: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'<')
+    .add(b'>')
+    .add(b'`')
+    .add(b'?')
+    .add(b'{')
+    .add(b'}');
+
+pub fn url_encode(path: &str) -> String {
+    percent_encoding::utf8_percent_encode(path, PATH_SET).to_string()
 }
 
 #[cfg(test)]
