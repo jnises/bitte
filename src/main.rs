@@ -47,12 +47,12 @@ enum RequestError {
 impl Reject for RequestError {}
 
 struct Ctx {
-    s3: Arc<S3Client>,
-    bucket: Arc<String>,
-    region: Arc<Region>,
-    credentials: Arc<AwsCredentials>,
+    s3: S3Client,
+    bucket: String,
+    region: Region,
+    credentials: AwsCredentials,
     // TODO put this in a struct along with the directory listing stuff to keep them together
-    handlebars: Arc<Handlebars<'static>>,
+    handlebars: Handlebars<'static>,
 }
 
 // TODO move directory listing stuff to separate file
@@ -80,7 +80,7 @@ async fn directory_listing(base: &str, ctx: &Ctx) -> Result<Box<dyn warp::Reply>
         let list = ctx
             .s3
             .list_objects_v2(ListObjectsV2Request {
-                bucket: (*ctx.bucket).clone(),
+                bucket: ctx.bucket.clone(),
                 prefix: Some(base.into()),
                 delimiter: Some("/".into()),
                 continuation_token: continuation_token.take(),
@@ -156,7 +156,7 @@ async fn directory_listing(base: &str, ctx: &Ctx) -> Result<Box<dyn warp::Reply>
 }
 
 // TODO is there some way to avoid the box in the return?
-async fn request(path: FullPath, ctx: Ctx) -> Result<Box<dyn warp::Reply>, Rejection> {
+async fn request(path: FullPath, ctx: Arc<Ctx>) -> Result<Box<dyn warp::Reply>, Rejection> {
     let pathstr = &percent_encoding::percent_decode_str(path.as_str())
         .decode_utf8()
         .map_err(RequestError::EncodingError)?;
@@ -168,7 +168,7 @@ async fn request(path: FullPath, ctx: Ctx) -> Result<Box<dyn warp::Reply>, Rejec
     } else {
         // TODO head object before presigning? check commit history for some of that code.
         let req = GetObjectRequest {
-            bucket: (*ctx.bucket).clone(),
+            bucket: ctx.bucket.clone(),
             key: pathstr.into(),
             ..Default::default()
         };
@@ -237,33 +237,30 @@ async fn main() {
             Region::default()
         }
     };
-    let s3 = Arc::new(S3Client::new(region.clone()));
-    let credentials = Arc::new(
-        DefaultCredentialsProvider::new()
+    let s3 = S3Client::new(region.clone());
+    let credentials = DefaultCredentialsProvider::new()
             .unwrap()
             .credentials()
             .await
-            .unwrap(),
-    );
+            .unwrap();
     let mut handlebars = Handlebars::new();
     handlebars.set_strict_mode(true);
     handlebars
         .register_template_string("directory_listing", DIR_LIST_TEMPLATE)
         .expect("bad directory_listing template");
-    let handlebars_arc = Arc::new(handlebars);
-    let region_arc = Arc::new(region);
-    let bucket_arc = Arc::new(opt.bucket);
+    let bucket = opt.bucket;
+    let ctx = Arc::new(Ctx {
+        s3,
+        bucket,
+        region,
+        credentials,
+        handlebars,
+    });
     let route = warp::path::full()
         .and_then(move |path: FullPath| {
             request(
                 path,
-                Ctx {
-                    s3: s3.clone(),
-                    bucket: bucket_arc.clone(),
-                    region: region_arc.clone(),
-                    credentials: credentials.clone(),
-                    handlebars: handlebars_arc.clone(),
-                },
+                ctx.clone(),
             )
         })
         .recover(handle_errors);
