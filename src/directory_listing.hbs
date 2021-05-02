@@ -9,10 +9,25 @@
 
     <h1>{{path}}</h1>
     <p>
-        {{#if parent}}<a href="{{parent}}">⏎</a><br>{{/if}}
+    <table>
+        <tr>
+            <th style="min-width: 16em;">name</th>
+            <th style="min-width: 5em;">size</th>
+            <th style="min-width: 5em;">last modified</th>
+        </tr>
+        {{#if parent}}
+        <tr>
+            <td><a href="{{parent}}">⏎</a></td>
+        </tr>
+        {{/if}}
         {{#each items}}
-        <a href="{{url}}">{{name}}</a><br>
+        <tr>
+            <td><a href="{{url}}">{{name}}</a></td>
+            <td>{{size}}</td>
+            <td>{{mtime}}</td>
+        </tr>
         {{/each}}
+    </table>
     </p>
 
 </body>

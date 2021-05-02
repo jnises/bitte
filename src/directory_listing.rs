@@ -1,5 +1,6 @@
 use crate::utils::{get_parent, url_encode};
 use handlebars::{Handlebars, RenderError};
+use humansize::{file_size_opts::BINARY, FileSize};
 use log::warn;
 use rusoto_core::RusotoError;
 use rusoto_s3::{ListObjectsV2Error, ListObjectsV2Request, S3Client, S3};
@@ -22,6 +23,8 @@ impl Reject for DirectoryListingError {}
 struct DirectoryListingItem {
     name: String,
     url: String,
+    size: String,
+    mtime: String,
 }
 
 #[derive(Serialize)]
@@ -76,12 +79,20 @@ impl DirectoryLister {
                         warn!("none in s3 listing common_prefixes");
                         None
                     })?;
-                    let name = p.strip_prefix(base).or_else(|| {
-                        warn!("common prefix without expected prefix found ({})", p);
-                        None
-                    })?.to_string();
+                    let name = p
+                        .strip_prefix(base)
+                        .or_else(|| {
+                            warn!("common prefix without expected prefix found ({})", p);
+                            None
+                        })?
+                        .to_string();
                     let url = get_url(&name);
-                    Some(DirectoryListingItem { name, url })
+                    Some(DirectoryListingItem {
+                        name,
+                        url,
+                        size: "".into(),
+                        mtime: "".into(),
+                    })
                 }));
             }
             if let Some(contents) = list.contents {
@@ -94,12 +105,23 @@ impl DirectoryLister {
                         warn!("key ending with / found ({})", key);
                         return None;
                     }
-                    let name = key.strip_prefix(base).or_else(|| {
-                        warn!("key without expected prefix found ({})", key);
-                        None
-                    })?.to_string();
+                    let name = key
+                        .strip_prefix(base)
+                        .or_else(|| {
+                            warn!("key without expected prefix found ({})", key);
+                            None
+                        })?
+                        .to_string();
                     let url = get_url(&name);
-                    Some(DirectoryListingItem { name, url })
+                    Some(DirectoryListingItem {
+                        name,
+                        url,
+                        size: c
+                            .size
+                            .and_then(|x| x.file_size(BINARY).ok())
+                            .unwrap_or_else(|| "?".into()),
+                        mtime: c.last_modified.unwrap_or_else(|| "?".into()),
+                    })
                 }));
             }
             if continuation_token.is_none() {
