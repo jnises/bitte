@@ -239,10 +239,10 @@ async fn main() {
     };
     let s3 = S3Client::new(region.clone());
     let credentials = DefaultCredentialsProvider::new()
-            .unwrap()
-            .credentials()
-            .await
-            .unwrap();
+        .unwrap()
+        .credentials()
+        .await
+        .unwrap();
     let mut handlebars = Handlebars::new();
     handlebars.set_strict_mode(true);
     handlebars
@@ -257,12 +257,7 @@ async fn main() {
         handlebars,
     });
     let route = warp::path::full()
-        .and_then(move |path: FullPath| {
-            request(
-                path,
-                ctx.clone(),
-            )
-        })
+        .and_then(move |path: FullPath| request(path, ctx.clone()))
         .recover(handle_errors);
 
     // TODO access logging
