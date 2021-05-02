@@ -53,8 +53,9 @@ impl DirectoryLister {
         bucket: &str,
     ) -> Result<Box<dyn warp::Reply>, Rejection> {
         debug_assert!(base.is_empty() || base.ends_with('/'));
-        let mut dirs: Vec<String> = vec![];
-        let mut files: Vec<String> = vec![];
+        let get_url = |name: &str| url_encode(&format!("/{}{}", base, name));
+        let mut dirs: Vec<DirectoryListingItem> = vec![];
+        let mut files: Vec<DirectoryListingItem> = vec![];
         let mut continuation_token = None;
         loop {
             // TODO use pagination
@@ -75,14 +76,16 @@ impl DirectoryLister {
                         warn!("none in s3 listing common_prefixes");
                         None
                     })?;
-                    p.strip_prefix(base).map(Into::into).or_else(|| {
+                    let name = p.strip_prefix(base).or_else(|| {
                         warn!("common prefix without expected prefix found ({})", p);
                         None
-                    })
+                    })?.to_string();
+                    let url = get_url(&name);
+                    Some(DirectoryListingItem { name, url })
                 }));
             }
             if let Some(contents) = list.contents {
-                files.extend(contents.into_iter().filter_map(|c| -> Option<String> {
+                files.extend(contents.into_iter().filter_map(|c| {
                     let key = c.key.or_else(|| {
                         warn!("none key in s3 listing contents");
                         None
@@ -91,10 +94,12 @@ impl DirectoryLister {
                         warn!("key ending with / found ({})", key);
                         return None;
                     }
-                    key.strip_prefix(base).map(Into::into).or_else(|| {
+                    let name = key.strip_prefix(base).or_else(|| {
                         warn!("key without expected prefix found ({})", key);
                         None
-                    })
+                    })?.to_string();
+                    let url = get_url(&name);
+                    Some(DirectoryListingItem { name, url })
                 }));
             }
             if continuation_token.is_none() {
@@ -104,16 +109,9 @@ impl DirectoryLister {
         if dirs.is_empty() && files.is_empty() {
             Err(warp::reject::not_found())
         } else {
-            let get_url = |name: &str| url_encode(&format!("/{}{}", base, name));
             let mut items = Vec::with_capacity(dirs.len() + files.len());
-            items.extend(dirs.into_iter().map(|name| {
-                let url = get_url(&name);
-                DirectoryListingItem { name, url }
-            }));
-            items.extend(files.into_iter().map(|name| {
-                let url = get_url(&name);
-                DirectoryListingItem { name, url }
-            }));
+            items.extend(dirs.into_iter());
+            items.extend(files.into_iter());
             let basepath = &format!("/{}", base);
             let parentpath = get_parent(&base);
             let parent = url_encode(&if let Some(parent) = parentpath {
