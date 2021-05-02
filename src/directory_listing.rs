@@ -18,7 +18,6 @@ enum DirectoryListingError {
 }
 impl Reject for DirectoryListingError {}
 
-// TODO move directory listing stuff to separate file
 #[derive(Serialize)]
 struct DirectoryListingItem {
     name: String,
