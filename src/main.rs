@@ -104,6 +104,9 @@ struct Opt {
 
     #[structopt(long)]
     endpoint: Option<String>,
+
+    #[structopt(long, short, default_value = "80")]
+    port: u16,
 }
 
 #[tokio::main]
@@ -146,5 +149,5 @@ async fn main() {
         .recover(handle_errors);
 
     // TODO access logging
-    warp::serve(route).run(([127, 0, 0, 1], 3030)).await;
+    warp::serve(route).run(([0, 0, 0, 0], opt.port)).await;
 }
