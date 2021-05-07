@@ -8,7 +8,7 @@ use serde::Serialize;
 use thiserror::Error;
 use warp::{reject::Reject, Rejection};
 
-const DIR_LIST_TEMPLATE: &'static str = include_str!("directory_listing.hbs");
+const DIR_LIST_TEMPLATE: &str = include_str!("directory_listing.hbs");
 
 #[derive(Error, Debug)]
 enum DirectoryListingError {

@@ -1,5 +1,4 @@
 #![warn(clippy::all)]
-use env_logger;
 use log::error;
 use rusoto_core::{
     credential::{AwsCredentials, DefaultCredentialsProvider, ProvideAwsCredentials},
@@ -49,8 +48,8 @@ async fn request(path: FullPath, ctx: Arc<Ctx>) -> Result<Box<dyn warp::Reply>, 
         .map_err(RequestError::EncodingError)?;
     let pathstr = pathstr
         .strip_prefix("/")
-        .ok_or_else(|| warp::reject::not_found())?;
-    if pathstr.is_empty() || pathstr.ends_with("/") {
+        .ok_or_else(warp::reject::not_found)?;
+    if pathstr.is_empty() || pathstr.ends_with('/') {
         ctx.lister
             .directory_listing(pathstr, &ctx.s3, &ctx.bucket)
             .await
@@ -81,7 +80,7 @@ async fn handle_errors(e: Rejection) -> Result<impl warp::Reply, Infallible> {
     if e.is_not_found() {
         code = StatusCode::NOT_FOUND;
         message = "NOT_FOUND";
-    } else if let Some(_) = e.find::<warp::reject::MethodNotAllowed>() {
+    } else if e.find::<warp::reject::MethodNotAllowed>().is_some() {
         code = StatusCode::METHOD_NOT_ALLOWED;
         message = "METHOD_NOT_ALLOWED";
     } else {
@@ -122,12 +121,10 @@ async fn main() {
             name: opt.region.unwrap_or_else(|| "custom".into()),
             endpoint,
         }
+    } else if let Some(region) = opt.region {
+        Region::from_str(&region).expect("bad region provided")
     } else {
-        if let Some(region) = opt.region {
-            Region::from_str(&region).expect("bad region provided")
-        } else {
-            Region::default()
-        }
+        Region::default()
     };
     let s3 = S3Client::new(region.clone());
     let credentials = DefaultCredentialsProvider::new()

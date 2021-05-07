@@ -1,7 +1,7 @@
 use percent_encoding::{AsciiSet, CONTROLS};
 
 pub fn get_parent(path: &str) -> Option<&str> {
-    debug_assert!(path.is_empty() || path.ends_with("/"));
+    debug_assert!(path.is_empty() || path.ends_with('/'));
     let path = path.strip_suffix('/')?;
     if let Some(slashi) = path.rfind('/') {
         Some(&path[..slashi + 1])
