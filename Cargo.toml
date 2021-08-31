@@ -1,23 +1,25 @@
 [package]
 name = "bitte"
-version = "0.1.0"
+version = "1.0.0"
 authors = ["Joel Nises <joel.nises@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-tokio = { version = "1.6", features = ["rt", "net", "macros"] }
-warp = "0.3"
-rusoto_core = "0.47"
-rusoto_s3 = "0.47"
-log = "0.4"
+tokio = { version = "1.10.1", features = ["rt", "net", "macros"] }
+warp = "0.3.1"
+rusoto_core = { version = "0.47", default_features = false, features=["rustls"] }
+rusoto_s3 = { version = "0.47", default_features = false, features=["rustls"] }
+log = "0.4.14"
 env_logger = "0.9"
-handlebars = "4.0"
-serde = "1.0"
-percent-encoding = "2.1"
-thiserror = "1.0"
-structopt = "0.3"
-humansize = "1.1"
+handlebars = "4.1.2"
+serde = "1.0.130"
+percent-encoding = "2.1.0"
+thiserror = "1.0.28"
+structopt = "0.3.23"
+humansize = "1.1.1"
 
-[dependencies.openssl]
-version = "0.10"
-features = ["vendored"]
+[profile.release]
+panic = 'abort'
+codegen-units = 1
+opt-level = 'z'
+lto = true
