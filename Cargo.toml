@@ -1,11 +1,11 @@
 [package]
 name = "bitte"
-version = "1.0.0"
+version = "1.0.1"
 authors = ["Joel Nises <joel.nises@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-tokio = { version = "1.10.1", features = ["rt", "net", "macros"] }
+tokio = { version = "1.12", features = ["rt", "net", "macros"] }
 warp = "0.3.1"
 rusoto_core = { version = "0.47", default_features = false, features=["rustls"] }
 rusoto_s3 = { version = "0.47", default_features = false, features=["rustls"] }

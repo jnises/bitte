@@ -16,3 +16,5 @@ To get info on available arguments:
 ./target/release/bitte --help
 ```
 
+You can test using minio running locally using something like `cargo run -- --endpoint http://localhost:9000 --bucket asdf`
+
