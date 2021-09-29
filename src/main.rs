@@ -47,7 +47,7 @@ async fn request(path: FullPath, ctx: Arc<Ctx>) -> Result<Box<dyn warp::Reply>, 
         .decode_utf8()
         .map_err(RequestError::EncodingError)?;
     let pathstr = pathstr
-        .strip_prefix("/")
+        .strip_prefix('/')
         .ok_or_else(warp::reject::not_found)?;
     if pathstr.is_empty() || pathstr.ends_with('/') {
         ctx.lister

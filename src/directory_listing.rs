@@ -135,7 +135,7 @@ impl DirectoryLister {
             items.extend(dirs.into_iter());
             items.extend(files.into_iter());
             let basepath = &format!("/{}", base);
-            let parentpath = get_parent(&base);
+            let parentpath = get_parent(base);
             let parent = url_encode(&if let Some(parent) = parentpath {
                 format!("/{}", parent)
             } else {
